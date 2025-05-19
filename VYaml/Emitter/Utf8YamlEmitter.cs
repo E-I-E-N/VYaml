@@ -508,6 +508,11 @@ namespace VYaml.Emitter
             WriteScalar(value ? YamlCodes.True0 : YamlCodes.False0);
         }
 
+        public void WriteChar(char value)
+        {
+            WriteString(value.ToString());
+        }
+
         public void WriteInt32(int value)
         {
             var offset = 0;

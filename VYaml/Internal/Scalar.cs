@@ -166,7 +166,7 @@ namespace VYaml.Parser
         /// <summary>
         /// </summary>
         /// <remarks>
-        /// true|True|TRUE|false|False|FALSE
+        /// 1|true|True|TRUE|0|false|False|FALSE
         /// </remarks>
         public bool TryGetBool(out bool value)
         {
@@ -179,6 +179,13 @@ namespace VYaml.Parser
             var span = AsSpan();
             switch (span.Length)
             {
+                case 1 when span[0] == (byte) '1':
+                    value = true;
+                    return true;
+                case 1 when span[0] == (byte) '0':
+                    value = false;
+                    return true;
+
                 case 4 when span.SequenceEqual(YamlCodes.True0) ||
                             span.SequenceEqual(YamlCodes.True1) ||
                             span.SequenceEqual(YamlCodes.True2):
@@ -267,6 +274,35 @@ namespace VYaml.Parser
                 value = (long)octalUlong;
                 return true;
             }
+            return false;
+        }
+
+        public bool TryGetChar(out char value)
+        {
+            var span = AsSpan();
+            if (IsStringScalar())
+            {
+                switch (span.Length)
+                {
+                    case 0:
+                        value = '\0';
+                        return true;
+                    case 1:
+                        value = (char) span[0];
+                        return true;
+                }
+
+                value = default;
+                return false;
+            }
+
+            if (TryGetUInt32(out var intValue))
+            {
+                value = (char)intValue;
+                return true;
+            }
+
+            value = default;
             return false;
         }
 

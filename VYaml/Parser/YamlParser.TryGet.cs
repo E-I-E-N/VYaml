@@ -68,6 +68,8 @@ namespace VYaml.Parser
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public readonly int GetScalarAsInt32()
         {
+            if (currentScalar == null)
+                return default;
             if (currentScalar is { } scalar && scalar.TryGetInt32(out var value))
             {
                 return value;
@@ -84,6 +86,17 @@ namespace VYaml.Parser
                 return value;
             }
             YamlParserException.Throw(CurrentMark, $"Cannot detect a scalar value as Int64: {CurrentEventType} {currentScalar}");
+            return default!;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly uint GetScalarAsChar()
+        {
+            if (currentScalar is { } scalar && scalar.TryGetChar(out var value))
+            {
+                return value;
+            }
+            YamlParserException.Throw(CurrentMark, $"Cannot detect a scalar value as Char : {CurrentEventType} {currentScalar}");
             return default!;
         }
 
@@ -116,6 +129,8 @@ namespace VYaml.Parser
             {
                 return value;
             }
+            if (CurrentEventType == ParseEventType.Scalar)
+                return default;
             YamlParserException.Throw(CurrentMark, $"Cannot detect scalar value as float : {CurrentEventType} {currentScalar}");
             return default!;
         }

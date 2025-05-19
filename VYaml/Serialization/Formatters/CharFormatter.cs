@@ -15,7 +15,7 @@ namespace VYaml.Serialization
 
         public char Deserialize(ref YamlParser parser, YamlDeserializationContext context)
         {
-            var result = parser.GetScalarAsUInt32();
+            var result = parser.GetScalarAsChar();
             parser.Read();
             return checked((char)result);
         }
