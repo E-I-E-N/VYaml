@@ -61,7 +61,6 @@ namespace VYaml.Parser
             {
                 return value;
             }
-            YamlParserException.Throw(CurrentMark, $"Cannot detect a scalar value as bool : {CurrentEventType} {currentScalar}");
             return default!;
         }
 
