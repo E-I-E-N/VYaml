@@ -1,8 +1,9 @@
-using System;
 using NUnit.Framework;
+using System;
 using VYaml.Annotations;
 using VYaml.Serialization;
 using VYaml.Tests.TypeDeclarations;
+
 
 namespace VYaml.Tests.Serialization
 {
@@ -70,7 +71,7 @@ namespace VYaml.Tests.Serialization
                     new() { One = 222 },
                 }
             });
-            Assert.That(result1, Is.EqualTo("one: \n" +
+            Assert.That(result1, Is.EqualTo("one:\n" +
                                            "- one: 111\n" +
                                            "- one: 222\n"));
 
@@ -227,7 +228,7 @@ namespace VYaml.Tests.Serialization
                 }
             });
             Assert.That(result, Is.EqualTo("a: 100\n" +
-                                           "unions: \n" +
+                                           "unions:\n" +
                                            "- !impl1\n" +
                                            "  a: 200\n" +
                                            "  b: foo\n" +
@@ -235,6 +236,21 @@ namespace VYaml.Tests.Serialization
                                            "  a: 300\n" +
                                            "  c: bar\n"));
 
+        }
+
+        public void Seralize_GenericType()
+        {
+            var result = Serialize(new GenericType<int>
+            {
+                Value = 100
+            });
+            Assert.That(result, Is.EqualTo("one: 100\n"));
+            var result2 = Serialize(new GenericType<int, string>
+            {
+                Foo = 111,
+                Bar = "aaa"
+            });
+            Assert.That(result2, Is.EqualTo("foo: 111\nbar: aaa\n"));
         }
 
         [Test]
@@ -402,6 +418,48 @@ namespace VYaml.Tests.Serialization
         }
 
         [Test]
+        public void Deserialize_UnsignedDefaultValues()
+        {
+            var result = Deserialize<WithUnsignedDefaultValues>("{}");
+            Assert.That(result.UintValue, Is.EqualTo(123u));
+            Assert.That(result.UlongValue, Is.EqualTo(456ul));
+            Assert.That(result.UshortValue, Is.EqualTo(789));
+            Assert.That(result.ByteValue, Is.EqualTo(255));
+        }
+
+        [Test]
+        public void Deserialize_UnsignedDefaultValues_PartialOverride()
+        {
+            var result = Deserialize<WithUnsignedDefaultValues>("{ uintValue: 999 }");
+            Assert.That(result.UintValue, Is.EqualTo(999u));
+            Assert.That(result.UlongValue, Is.EqualTo(456ul));
+            Assert.That(result.UshortValue, Is.EqualTo(789));
+            Assert.That(result.ByteValue, Is.EqualTo(255));
+        }
+
+        [Test]
+        public void Deserialize_NumericDefaultValues()
+        {
+            var result = Deserialize<WithNumericDefaultValues>("{}");
+            Assert.That(result.Address, Is.EqualTo((ushort)0));
+            Assert.That(result.ShortValue, Is.EqualTo((short)0));
+            Assert.That(result.SbyteValue, Is.EqualTo((sbyte)0));
+            Assert.That(result.ReadOnly, Is.EqualTo(false));
+            Assert.That(result.Name, Is.EqualTo(""));
+        }
+
+        [Test]
+        public void Deserialize_NumericDefaultValues_PartialOverride()
+        {
+            var result = Deserialize<WithNumericDefaultValues>("{ address: 100, shortValue: -50 }");
+            Assert.That(result.Address, Is.EqualTo((ushort)100));
+            Assert.That(result.ShortValue, Is.EqualTo((short)-50));
+            Assert.That(result.SbyteValue, Is.EqualTo((sbyte)0));
+            Assert.That(result.ReadOnly, Is.EqualTo(false));
+            Assert.That(result.Name, Is.EqualTo(""));
+        }
+
+        [Test]
         public void Deserialize_CustomNamingConvention()
         {
             var result1 = Deserialize<WithCustomNamingConvention>("{ hoge_fuga: 123 }");
@@ -438,5 +496,197 @@ namespace VYaml.Tests.Serialization
                 new YamlSerializerOptions { NamingConvention = NamingConvention.UpperCamelCase });
             Assert.That(result2.B, Is.EqualTo(123));
         }
+
+        public void Deserialize_GenericType()
+        {
+            var result = Deserialize<GenericType<int>>("{ one: 100 }");
+            Assert.That(result.Value, Is.EqualTo(100));
+
+            var result2 = Deserialize<GenericType<int, string>>("{ foo: 111, bar: aaa }");
+            Assert.That(result2.Foo, Is.EqualTo(111));
+            Assert.That(result2.Bar, Is.EqualTo("aaa"));
+        }
+
+        [Test]
+        public void Serialize_PrivateMembers()
+        {
+            var obj = new WithPrivateMembers(100, 200, "internal-val", "public-val");
+            var result = Serialize(obj);
+            Assert.That(result, Does.Contain("publicField: 100"));
+            Assert.That(result, Does.Contain("privateField: 200"));
+            Assert.That(result, Does.Contain("internalProperty: internal-val"));
+            Assert.That(result, Does.Contain("publicProperty: public-val"));
+        }
+
+        [Test]
+        public void Deserialize_PrivateMembers()
+        {
+            var result = Deserialize<WithPrivateMembers>(
+                "publicField: 100\n" +
+                "privateField: 200\n" +
+                "internalProperty: hello\n" +
+                "publicProperty: world\n");
+            Assert.That(result.PublicField, Is.EqualTo(100));
+            Assert.That(result.GetPrivateField(), Is.EqualTo(200));
+            Assert.That(result.InternalProperty, Is.EqualTo("hello"));
+            Assert.That(result.PublicProperty, Is.EqualTo("world"));
+        }
+
+        [Test]
+        public void RoundTrip_PrivateMembers()
+        {
+            var original = new WithPrivateMembers(42, 99, "secret", "visible");
+            var yaml = Serialize(original);
+            var deserialized = Deserialize<WithPrivateMembers>(yaml);
+            Assert.That(deserialized.PublicField, Is.EqualTo(42));
+            Assert.That(deserialized.GetPrivateField(), Is.EqualTo(99));
+            Assert.That(deserialized.InternalProperty, Is.EqualTo("secret"));
+            Assert.That(deserialized.PublicProperty, Is.EqualTo("visible"));
+        }
+
+        [Test]
+        public void Serialize_PrivateMembersSettable()
+        {
+            var yaml = "publicValue: 10\nsecret: 42\n";
+            var result = Deserialize<WithPrivateMembersSettable>(yaml);
+            Assert.That(result.PublicValue, Is.EqualTo(10));
+            Assert.That(result.GetSecret(), Is.EqualTo(42));
+
+            var serialized = Serialize(result);
+            Assert.That(serialized, Does.Contain("publicValue: 10"));
+            Assert.That(serialized, Does.Contain("secret: 42"));
+        }
+
+        [Test]
+        public void Serialize_DefaultIgnoreCondition_Never()
+        {
+            var options = new YamlSerializerOptions
+            {
+                Resolver = StandardResolver.Instance,
+                DefaultIgnoreCondition = YamlIgnoreCondition.Never,
+            };
+
+            var obj = new TypeWithNullableProperties();
+            var result = Serialize(obj, options);
+
+            Assert.That(result, Does.Contain("nullableString:"));
+            Assert.That(result, Does.Contain("nonNullableString:"));
+            Assert.That(result, Does.Contain("nullableInt:"));
+            Assert.That(result, Does.Contain("nonNullableInt:"));
+            Assert.That(result, Does.Contain("boolValue:"));
+            Assert.That(result, Does.Contain("doubleValue:"));
+            Assert.That(result, Does.Contain("nullableObject:"));
+            Assert.That(result, Does.Contain("nonNullableObject:"));
+        }
+
+        [Test]
+        public void Serialize_DefaultIgnoreCondition_WhenWritingNull()
+        {
+            var options = new YamlSerializerOptions
+            {
+                Resolver = StandardResolver.Instance,
+                DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingNull,
+            };
+
+            var obj = new TypeWithNullableProperties
+            {
+                NullableString = null,
+                NullableInt = null,
+                NullableObject = null,
+                NonNullableInt = 0,
+                BoolValue = false,
+                DoubleValue = 0.0,
+            };
+            var result = Serialize(obj, options);
+
+            Assert.That(result, Does.Not.Contain("nullableString:"));
+            Assert.That(result, Does.Contain("nonNullableString:"));
+            Assert.That(result, Does.Not.Contain("nullableInt:"));
+            Assert.That(result, Does.Contain("nonNullableInt:"));
+            Assert.That(result, Does.Contain("boolValue:"));
+            Assert.That(result, Does.Contain("doubleValue:"));
+            Assert.That(result, Does.Not.Contain("nullableObject:"));
+            Assert.That(result, Does.Contain("nonNullableObject:"));
+        }
+
+        [Test]
+        public void Serialize_DefaultIgnoreCondition_WhenWritingNull_WithValues()
+        {
+            var options = new YamlSerializerOptions
+            {
+                Resolver = StandardResolver.Instance,
+                DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingNull,
+            };
+
+            var obj = new TypeWithNullableProperties
+            {
+                NullableString = "hello",
+                NullableInt = 42,
+                NullableObject = new SimpleTypeOne { One = 1 },
+            };
+            var result = Serialize(obj, options);
+
+            Assert.That(result, Does.Contain("nullableString:"));
+            Assert.That(result, Does.Contain("nullableInt:"));
+            Assert.That(result, Does.Contain("nullableObject:"));
+        }
+
+        [Test]
+        public void Serialize_DefaultIgnoreCondition_WhenWritingDefault()
+        {
+            var options = new YamlSerializerOptions
+            {
+                Resolver = StandardResolver.Instance,
+                DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingDefault,
+            };
+
+            var obj = new TypeWithNullableProperties
+            {
+                NullableString = null,
+                NonNullableString = "default",
+                NullableInt = null,
+                NonNullableInt = 0,
+                BoolValue = false,
+                DoubleValue = 0.0,
+                NullableObject = null,
+            };
+            var result = Serialize(obj, options);
+
+            Assert.That(result, Does.Not.Contain("nullableString:"));
+            Assert.That(result, Does.Contain("nonNullableString:"));
+            Assert.That(result, Does.Not.Contain("nullableInt:"));
+            Assert.That(result, Does.Not.Contain("nonNullableInt:"));
+            Assert.That(result, Does.Not.Contain("boolValue:"));
+            Assert.That(result, Does.Not.Contain("doubleValue:"));
+            Assert.That(result, Does.Not.Contain("nullableObject:"));
+            Assert.That(result, Does.Contain("nonNullableObject:"));
+        }
+
+        [Test]
+        public void Serialize_DefaultIgnoreCondition_WhenWritingDefault_WithValues()
+        {
+            var options = new YamlSerializerOptions
+            {
+                Resolver = StandardResolver.Instance,
+                DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingDefault,
+            };
+
+            var obj = new TypeWithNullableProperties
+            {
+                NullableString = "hello",
+                NonNullableInt = 42,
+                BoolValue = true,
+                DoubleValue = 3.14,
+                NullableInt = 10,
+            };
+            var result = Serialize(obj, options);
+
+            Assert.That(result, Does.Contain("nullableString:"));
+            Assert.That(result, Does.Contain("nonNullableInt:"));
+            Assert.That(result, Does.Contain("boolValue:"));
+            Assert.That(result, Does.Contain("doubleValue:"));
+            Assert.That(result, Does.Contain("nullableInt:"));
+        }
+
     }
 }

@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 
 namespace VYaml.SourceGenerator;
 
@@ -35,7 +35,9 @@ public class VYamlSourceGenerator : ISourceGenerator
                     var fullType = typeMeta.FullTypeName
                         .Replace("global::", "")
                         .Replace("<", "_")
-                        .Replace(">", "_");
+                        .Replace(">", "_")
+                        .Replace(",", "_")
+                        .Replace(" ", "");
 
                     context.AddSource($"{fullType}.YamlFormatter.g.cs", codeWriter.ToString());
                 }
@@ -253,7 +255,9 @@ public class VYamlSourceGenerator : ISourceGenerator
     {
         codeWriter.AppendLine("[VYaml.Annotations.Preserve]");
         using var _ = codeWriter.BeginBlockScope("public static void __RegisterVYamlFormatter()");
-        codeWriter.AppendLine($"global::VYaml.Serialization.GeneratedResolver.Register(new {typeMeta.TypeName}GeneratedFormatter());");
+
+        var typeName = typeMeta.TypeName.Replace("<", "_").Replace(">", "_").Replace(",", "_").Replace(" ", "");
+        codeWriter.AppendLine($"global::VYaml.Serialization.GeneratedResolver.Register(new {typeName}GeneratedFormatter());");
         return true;
     }
 
@@ -268,7 +272,9 @@ public class VYamlSourceGenerator : ISourceGenerator
             : $"{typeMeta.FullTypeName}?";
 
         codeWriter.AppendLine("[VYaml.Annotations.Preserve]");
-        using var _ = codeWriter.BeginBlockScope($"public class {typeMeta.TypeName}GeneratedFormatter : IYamlFormatter<{returnType}>");
+
+        var typeName = typeMeta.TypeName.Replace("<", "_").Replace(">", "_").Replace(",", "_").Replace(" ", "");
+        using var _ = codeWriter.BeginBlockScope($"public class {typeName}GeneratedFormatter : IYamlFormatter<{returnType}>");
 
         // Union
         if (typeMeta.IsUnion)
@@ -313,6 +319,8 @@ public class VYamlSourceGenerator : ISourceGenerator
         codeWriter.AppendLine("emitter.BeginMapping();");
         foreach (var memberMeta in memberMetas)
         {
+            var ignoreScope = Emitter.EmitIgnoreConditionCheck(codeWriter, memberMeta);
+
             if (memberMeta.HasKeyNameAlias)
             {
                 codeWriter.AppendLine($"emitter.WriteString(\"{memberMeta.KeyName}\");");
@@ -322,6 +330,12 @@ public class VYamlSourceGenerator : ISourceGenerator
                 codeWriter.AppendLine($"emitter.WriteString(\"{memberMeta.KeyName}\", ScalarStyle.Plain);");
             }
             codeWriter.AppendLine($"context.Serialize(ref emitter, value.{memberMeta.Name});");
+
+            if (ignoreScope != null)
+            {
+                ignoreScope.Dispose();
+                codeWriter.AppendLine("}");
+            }
         }
         codeWriter.AppendLine("emitter.EndMapping();");
 
@@ -607,7 +621,9 @@ public class VYamlSourceGenerator : ISourceGenerator
         foreach (var parameter in selectedConstructor.Parameters)
         {
             var matchedMember = typeMeta.MemberMetas
-                .FirstOrDefault(member => parameter.Name.Equals(member.Name, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(member =>
+                    parameter.Name.Equals(member.Name, StringComparison.OrdinalIgnoreCase) ||
+                    parameter.Name.Equals(member.KeyName, StringComparison.OrdinalIgnoreCase));
             if (matchedMember != null)
             {
                 matchedMember.IsConstructorParameter = true;

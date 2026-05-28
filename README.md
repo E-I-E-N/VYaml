@@ -70,7 +70,7 @@ dotnet add package VYaml
 3. (Optional) Installing Unity-specific extensions:
   - Open the Package Manager window by selecting Window > Package Manager, then click on [+] > Add package from git URL and enter the following URL:
   - ```
-    https://github.com/hadashiA/VYaml.git?path=VYaml.Unity/Assets/VYaml#1.1.1
+    https://github.com/hadashiA/VYaml.git?path=VYaml.Unity/Assets/VYaml#1.3.0
     ```
 
 ## Usage
@@ -264,6 +264,25 @@ documents[0]["Warning"] // #=> "This is an error message for the log file"
 documents[1]["Warning"] // #=> "A slightly different error message."
 documents[2]["Fatal"]   // #=> "Unknown variable \"bar\""
 ```
+
+#### DefaultIgnoreCondition
+
+You can control whether null or default-valued properties are omitted during serialization using `YamlSerializerOptions.DefaultIgnoreCondition`.
+
+```cs
+var options = YamlSerializerOptions.Standard;
+
+// Omit properties that are null
+options.DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingNull;
+
+// Omit properties that are null or have their default value (0, false, etc.)
+options.DefaultIgnoreCondition = YamlIgnoreCondition.WhenWritingDefault;
+```
+
+List of possible values:
+- `YamlIgnoreCondition.Never` (default) — Always serialize all properties
+- `YamlIgnoreCondition.WhenWritingNull` — Omit properties whose value is `null` (reference types and `Nullable<T>`)
+- `YamlIgnoreCondition.WhenWritingDefault` — Omit properties whose value is `null` or the default value for value types (`0`, `false`, `'\0'`, etc.)
 
 #### Naming convention
 

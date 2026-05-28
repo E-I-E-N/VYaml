@@ -33,7 +33,12 @@ class MemberMeta
         Name = symbol.Name;
         Order = sequentialOrder;
         NamingConventionByType = namingConventionByType;
-        KeyName = NamingConventionMutator.Mutate(Name, NamingConventionByType);
+
+        // Strip leading '_' from private field names for key generation (e.g. _myField -> myField)
+        var nameForKey = symbol.DeclaredAccessibility != Accessibility.Public && Name.StartsWith("_")
+            ? Name.Substring(1)
+            : Name;
+        KeyName = NamingConventionMutator.Mutate(nameForKey, NamingConventionByType);
 
         var memberAttribute = symbol.GetAttribute(references.YamlMemberAttribute);
         if (memberAttribute != null)
@@ -90,14 +95,30 @@ class MemberMeta
                 : $"default({FullTypeName})";
         }
 
-        return ExplicitDefaultValueFromConstructor switch
+        if (ExplicitDefaultValueFromConstructor is null)
         {
-            null => $"default({FullTypeName})",
-            string x => $"\"{x}\"",
-            float x => $"{x}f",
-            double x => $"{x}d",
-            decimal x => $"{x}m",
-            bool x => x ? "true" : "false",
+            return $"default({FullTypeName})";
+        }
+
+        // Use MemberType.SpecialType instead of runtime type pattern matching,
+        // because Roslyn may box numeric default values as int regardless of the parameter type.
+        return MemberType.SpecialType switch
+        {
+            SpecialType.System_String => $"\"{ExplicitDefaultValueFromConstructor}\"",
+            SpecialType.System_Single => $"{ExplicitDefaultValueFromConstructor}f",
+            SpecialType.System_Double => $"{ExplicitDefaultValueFromConstructor}d",
+            SpecialType.System_Decimal => $"{ExplicitDefaultValueFromConstructor}m",
+            SpecialType.System_Boolean => (bool)ExplicitDefaultValueFromConstructor ? "true" : "false",
+            SpecialType.System_Int32 => $"{ExplicitDefaultValueFromConstructor}",
+            SpecialType.System_Int64 => $"{ExplicitDefaultValueFromConstructor}L",
+            SpecialType.System_UInt32 => $"{ExplicitDefaultValueFromConstructor}u",
+            SpecialType.System_UInt64 => $"{ExplicitDefaultValueFromConstructor}ul",
+            SpecialType.System_Int16 => $"(short){ExplicitDefaultValueFromConstructor}",
+            SpecialType.System_UInt16 => $"(ushort){ExplicitDefaultValueFromConstructor}",
+            SpecialType.System_Byte => $"(byte){ExplicitDefaultValueFromConstructor}",
+            SpecialType.System_SByte => $"(sbyte){ExplicitDefaultValueFromConstructor}",
+            SpecialType.System_Char => $"(char){ExplicitDefaultValueFromConstructor}",
+            _ when MemberType.TypeKind == TypeKind.Enum => $"({FullTypeName}){ExplicitDefaultValueFromConstructor}",
             _ => ExplicitDefaultValueFromConstructor.ToString()
         };
     }

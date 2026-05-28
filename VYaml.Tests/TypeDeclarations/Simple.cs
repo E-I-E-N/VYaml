@@ -277,6 +277,119 @@ namespace VYaml.Tests.TypeDeclarations
     {
         public int HogeFuga { get; set; }
     }
+
+    [YamlObject]
+    public partial class WithUnsignedDefaultValues
+    {
+        public uint UintValue { get; }
+        public ulong UlongValue { get; }
+        public ushort UshortValue { get; }
+        public byte ByteValue { get; }
+
+        [YamlConstructor]
+        public WithUnsignedDefaultValues(
+            uint uintValue = 123u,
+            ulong ulongValue = 456ul,
+            ushort ushortValue = 789,
+            byte byteValue = 255)
+        {
+            UintValue = uintValue;
+            UlongValue = ulongValue;
+            UshortValue = ushortValue;
+            ByteValue = byteValue;
+        }
+    }
+
+    [YamlObject]
+    public partial class GenericType<T>
+    {
+        public T? Value { get; set; }
+    }
+
+    [YamlObject]
+    public partial class GenericType<T, T2>
+    {
+        public T? Foo { get; set; }
+
+        public T2? Bar { get; set; }
+    }
+
+    [YamlObject]
+    public partial class WithNumericDefaultValues
+    {
+        public ushort Address { get; }
+        public short ShortValue { get; }
+        public sbyte SbyteValue { get; }
+        public bool ReadOnly { get; }
+        public string Name { get; }
+
+        [YamlConstructor]
+        public WithNumericDefaultValues(
+            ushort address = 0,
+            short shortValue = 0,
+            sbyte sbyteValue = 0,
+            bool readOnly = false,
+            string name = "")
+        {
+            Address = address;
+            ShortValue = shortValue;
+            SbyteValue = sbyteValue;
+            ReadOnly = readOnly;
+            Name = name;
+        }
+    }
+    [YamlObject]
+    public partial class WithPrivateMembers
+    {
+        public int PublicField;
+
+        [YamlMember("privateField")]
+        int _privateField;
+
+        [YamlMember]
+        internal string InternalProperty { get; set; } = default!;
+
+        public string PublicProperty { get; set; } = default!;
+
+        [YamlConstructor]
+        public WithPrivateMembers(int publicField, int privateField, string internalProperty, string publicProperty)
+        {
+            PublicField = publicField;
+            _privateField = privateField;
+            InternalProperty = internalProperty;
+            PublicProperty = publicProperty;
+        }
+
+        public int GetPrivateField() => _privateField;
+    }
+
+    [YamlObject]
+    public partial class WithPrivateMembersSettable
+    {
+        public int PublicValue { get; set; }
+
+        [YamlMember("secret")]
+        int _secret;
+
+        public WithPrivateMembersSettable()
+        {
+        }
+
+        public int GetSecret() => _secret;
+    }
+
+    [YamlObject]
+    public partial class TypeWithNullableProperties
+    {
+        public string? NullableString { get; set; }
+        public string NonNullableString { get; set; } = "default";
+        public int? NullableInt { get; set; }
+        public int NonNullableInt { get; set; }
+        public bool BoolValue { get; set; }
+        public double DoubleValue { get; set; }
+        public SimpleTypeOne? NullableObject { get; set; }
+        public SimpleTypeOne NonNullableObject { get; set; } = new SimpleTypeOne();
+    }
 }
 
 // another namespace, same type name

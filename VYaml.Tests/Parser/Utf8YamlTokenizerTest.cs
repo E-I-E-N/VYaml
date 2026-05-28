@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using NUnit.Framework;
 using VYaml.Parser;
@@ -717,6 +718,7 @@ namespace VYaml.Tests
         [Test]
         [TestCase("! x", "!")]
         [TestCase("!a%21b x", "!a!b")]
+        [TestCase("!%F0%9F%98%80", "!😀")]
         [TestCase("!!str x", "!!str")]
         [TestCase("!a!str- x", "!a!str-")]
         [TestCase("!!str, x", "!!str")]
@@ -746,6 +748,60 @@ namespace VYaml.Tests
             tokenizer.Read();
             tokenizer.Read();
             return Scalar(ref tokenizer).IsNull();
+        }
+        
+        [Test]
+        [TestCase( "あ")]
+        [TestCase( "😀")]
+        
+        public void CodePointUtf16Test(string literal)
+        {
+            CreateTokenizer($"\"{ string.Join("",literal.Select(c=> $"\\u{(ushort)c:X4}"))}\"", out var  tokenizer);
+            tokenizer.Read();
+            tokenizer.Read();
+            Assert.That(Scalar(ref tokenizer).ToString(), Is.EqualTo(literal));
+        }
+        
+        [Test]
+        [TestCase( "あ")]
+        [TestCase( "😀")]
+        
+        public void CodePointUtf32Test(string literal)
+        {
+            Rune.DecodeFromUtf16(literal,out var rune, out var charsConsumed);
+            CreateTokenizer($"\"\\U{rune.Value:X8}\"", out var  tokenizer);
+            tokenizer.Read();
+            tokenizer.Read();
+            Assert.That(Scalar(ref tokenizer).ToString(), Is.EqualTo(literal));
+        }
+
+        [Test]
+        [Timeout(5000)]
+        public void MappingKeyWithColonAtEof()
+        {
+            CreateTokenizer("  property:", out var tokenizer);
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.StreamStart));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.BlockMappingStart));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.KeyStart));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.PlainScalar));
+            Assert.That(Scalar(ref tokenizer).ToString(), Is.EqualTo("property"));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.ValueStart));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.BlockEnd));
+
+            Assert.That(tokenizer.Read(), Is.True);
+            Assert.That(tokenizer.CurrentTokenType, Is.EqualTo(TokenType.StreamEnd));
         }
 
         static void CreateTokenizer(IEnumerable<string> lines, out Utf8YamlTokenizer tokenizer)
