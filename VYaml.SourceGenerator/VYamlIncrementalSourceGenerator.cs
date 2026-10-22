@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -6,12 +6,19 @@ using Microsoft.CodeAnalysis.DotnetRuntime.Extensions;
 
 namespace VYaml.SourceGenerator;
 
+static class TrackingNames
+{
+    public const string Model = "VYaml.Model";
+    public const string Emit = "VYaml.Emit";
+}
+
 [Generator]
 public class VYamlIncrementalSourceGenerator : IIncrementalGenerator
 {
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var provider = context.SyntaxProvider
+        // 1. transform: symbols -> value-equatable TypeMetaModel (the cache key).
+        var models = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 context,
                 "VYaml.Annotations.YamlObjectAttribute",
@@ -22,60 +29,58 @@ public class VYamlIncrementalSourceGenerator : IIncrementalGenerator
                         or RecordDeclarationSyntax
                         or InterfaceDeclarationSyntax;
                 },
-                static (context, cancellation) => context)
-            .Combine(context.CompilationProvider)
-            .WithComparer(Comparer.Instance);
-
-        // Generate the source code.
-        context.RegisterSourceOutput(
-            context.CompilationProvider.Combine(provider.Collect()),
-            (sourceProductionContext, t) =>
-            {
-                var (compilation, list) = t;
-                var references = ReferenceSymbols.Create(compilation);
-                if (references is null)
+                static (context, cancellation) =>
                 {
-                    return;
-                }
-
-                var codeWriter = new CodeWriter();
-
-                foreach (var (x, _) in list)
-                {
-                    var typeMeta = new TypeMeta(
-                        (TypeDeclarationSyntax)x.TargetNode,
-                        (INamedTypeSymbol)x.TargetSymbol,
-                        x.Attributes.First(),
-                        references);
-
-                    if (Emitter.TryEmit(typeMeta, codeWriter, references, sourceProductionContext))
+                    var references = ReferenceSymbols.Create(context.SemanticModel.Compilation);
+                    if (references is null)
                     {
-                        var fullType = typeMeta.FullTypeName
-                            .Replace("global::", "")
-                            .Replace("<", "_")
-                            .Replace(">", "_")
-                            .Replace(",", "_")
-                            .Replace(" ", "");
-
-                        sourceProductionContext.AddSource($"{fullType}.YamlFormatter.g.cs", codeWriter.ToString());
+                        return null;
                     }
-                    codeWriter.Clear();
-                }
-            });
+                    return TypeMetaAnalyzer.Analyze(
+                        (INamedTypeSymbol)context.TargetSymbol,
+                        (TypeDeclarationSyntax)context.TargetNode,
+                        context.Attributes.First(),
+                        references);
+                })
+            .Where(static x => x is not null)
+            .WithTrackingName(TrackingNames.Model);
+
+        // 2. emit: model -> source string. Cached on the model, so the string is only
+        //    rebuilt when a type's relevant shape actually changes.
+        var emitted = models.Select(static (model, cancellation) =>
+        {
+            var source = model!.IsValid ? Emitter.Emit(model) : null;
+            return new EmitResult(model.HintName, source, model.Diagnostics);
+        }).WithTrackingName(TrackingNames.Emit);
+
+        // 3. output: report diagnostics + AddSource. Skipped when the EmitResult is unchanged.
+        context.RegisterSourceOutput(emitted, static (sourceProductionContext, result) =>
+        {
+            foreach (var diagnostic in result.Diagnostics)
+            {
+                sourceProductionContext.ReportDiagnostic(diagnostic.ToDiagnostic());
+            }
+
+            if (result.Source is { } source)
+            {
+                sourceProductionContext.AddSource(result.HintName, source);
+            }
+        });
     }
 }
 
-class Comparer : IEqualityComparer<(GeneratorAttributeSyntaxContext, Compilation)>
+// Value-equatable emit output. Equality lets Roslyn skip RegisterSourceOutput (the AddSource call)
+// for types whose generated output is unchanged.
+sealed record EmitResult
 {
-    public static readonly Comparer Instance = new();
+    public string HintName { get; }
+    public string? Source { get; }
+    public EquatableArray<DiagnosticInfo> Diagnostics { get; }
 
-    public bool Equals((GeneratorAttributeSyntaxContext, Compilation) x, (GeneratorAttributeSyntaxContext, Compilation) y)
+    public EmitResult(string hintName, string? source, EquatableArray<DiagnosticInfo> diagnostics)
     {
-        return x.Item1.TargetNode.IsEquivalentTo(y.Item1.TargetNode);
-    }
-
-    public int GetHashCode((GeneratorAttributeSyntaxContext, Compilation) obj)
-    {
-        return obj.Item1.TargetNode.GetHashCode();
+        HintName = hintName;
+        Source = source;
+        Diagnostics = diagnostics;
     }
 }

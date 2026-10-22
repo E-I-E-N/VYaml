@@ -5,7 +5,7 @@ using VYaml.Internal;
 
 namespace VYaml.Parser
 {
-    class YamlTokenizerException(in Marker marker, string message) : Exception($"{message} at {marker}");
+    public class YamlTokenizerException(in Marker marker, string message) : YamlException($"{message} at {marker}");
 
     struct SimpleKeyState
     {
@@ -17,17 +17,78 @@ namespace VYaml.Parser
 
     public ref struct Utf8YamlTokenizer
     {
-        [ThreadStatic]
-        static InsertionQueue<Token>? tokensBufferStatic;
+        // IL2CPP does not emit GC write barriers for stores into static fields declared on a value type
+        // (including ref structs). With the incremental GC enabled, objects stored there can be collected
+        // while still referenced, so keep them on a reference type instead.
+        static class Statics
+        {
+            // Byte sets that terminate a contiguous run of plain-scalar characters.
+            // Used to bulk-copy runs instead of consuming one byte at a time.
+            // Line breaks (Lf/Cr) are included so a run never spans multiple lines,
+            // which keeps mark.Col advancement a simple addition.
+#if NET8_0_OR_GREATER
+            public static readonly System.Buffers.SearchValues<byte> PlainScalarStopBlock =
+                System.Buffers.SearchValues.Create(
+                [
+                    YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                    YamlCodes.MapValueIndent,
+                ]);
 
-        [ThreadStatic]
-        static ExpandBuffer<SimpleKeyState>? simpleKeyBufferStatic;
+            public static readonly System.Buffers.SearchValues<byte> PlainScalarStopFlow =
+                System.Buffers.SearchValues.Create(
+                [
+                    YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                    YamlCodes.MapValueIndent, YamlCodes.Comma,
+                    YamlCodes.FlowSequenceStart, YamlCodes.FlowSequenceEnd,
+                    YamlCodes.FlowMapStart, YamlCodes.FlowMapEnd,
+                ]);
+#else
+            public static readonly byte[] PlainScalarStopBlock =
+            [
+                YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                YamlCodes.MapValueIndent,
+            ];
 
-        [ThreadStatic]
-        static ExpandBuffer<int>? indentsBufferStatic;
+            public static readonly byte[] PlainScalarStopFlow =
+            [
+                YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                YamlCodes.MapValueIndent, YamlCodes.Comma,
+                YamlCodes.FlowSequenceStart, YamlCodes.FlowSequenceEnd,
+                YamlCodes.FlowMapStart, YamlCodes.FlowMapEnd,
+            ];
+#endif
 
-        [ThreadStatic]
-        static ExpandBuffer<byte>? lineBreaksBufferStatic;
+            // Byte sets that terminate a contiguous run of ordinary characters inside a
+            // quoted scalar: blanks/line breaks (handled by the folding logic), the closing
+            // quote and, for double quotes, the escape byte.
+#if NET8_0_OR_GREATER
+            public static readonly System.Buffers.SearchValues<byte> FlowScalarStopSingle =
+                System.Buffers.SearchValues.Create(
+                [
+                    YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                    YamlCodes.SingleQuote,
+                ]);
+
+            public static readonly System.Buffers.SearchValues<byte> FlowScalarStopDouble =
+                System.Buffers.SearchValues.Create(
+                [
+                    YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                    YamlCodes.DoubleQuote, (byte)'\\',
+                ]);
+#else
+            public static readonly byte[] FlowScalarStopSingle =
+            [
+                YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                YamlCodes.SingleQuote,
+            ];
+
+            public static readonly byte[] FlowScalarStopDouble =
+            [
+                YamlCodes.Space, YamlCodes.Tab, YamlCodes.Lf, YamlCodes.Cr,
+                YamlCodes.DoubleQuote, (byte)'\\',
+            ];
+#endif
+        }
 
         public TokenType CurrentTokenType
         {
@@ -58,6 +119,7 @@ namespace VYaml.Parser
         readonly InsertionQueue<Token> tokens;
         readonly ExpandBuffer<SimpleKeyState> simpleKeyCandidates;
         readonly ExpandBuffer<int> indents;
+        ExpandBuffer<byte> lineBreaksBuffer;
 
         public Utf8YamlTokenizer(ReadOnlySequence<byte> sequence)
         {
@@ -75,16 +137,27 @@ namespace VYaml.Parser
 
             currentToken = default;
 
-            tokens = tokensBufferStatic ??= new InsertionQueue<Token>(16);
-            tokens.Clear();
-
-            simpleKeyCandidates = simpleKeyBufferStatic ??= new ExpandBuffer<SimpleKeyState>(16);
-            simpleKeyCandidates.Clear();
-
-            indents = indentsBufferStatic ??= new ExpandBuffer<int>(16);
-            indents.Clear();
+            tokens = ThreadLocalObjectPool<InsertionQueue<Token>>.Rent(static () => new InsertionQueue<Token>(16));
+            simpleKeyCandidates = ThreadLocalObjectPool<ExpandBuffer<SimpleKeyState>>.Rent(static () => new ExpandBuffer<SimpleKeyState>(16));
+            indents = ThreadLocalObjectPool<ExpandBuffer<int>>.Rent(static () => new ExpandBuffer<int>(16));
+            lineBreaksBuffer = ThreadLocalObjectPool<ExpandBuffer<byte>>.Rent(static () => new ExpandBuffer<byte>(64));
 
             reader.TryPeek(out currentCode);
+        }
+
+        internal void ReturnPool()
+        {
+            tokens.Clear();
+            ThreadLocalObjectPool<InsertionQueue<Token>>.Return(tokens);
+
+            simpleKeyCandidates.Clear();
+            ThreadLocalObjectPool<ExpandBuffer<SimpleKeyState>>.Return(simpleKeyCandidates);
+
+            indents.Clear();
+            ThreadLocalObjectPool<ExpandBuffer<int>>.Return(indents);
+
+            lineBreaksBuffer.Clear();
+            ThreadLocalObjectPool<ExpandBuffer<byte>>.Return(lineBreaksBuffer);
         }
 
         public bool Read()
@@ -894,8 +967,7 @@ namespace VYaml.Parser
             var leadingBreak = LineBreakState.None;
             var scalar = ScalarPool.Shared.Rent();
 
-            lineBreaksBufferStatic ??= new ExpandBuffer<byte>(64);
-            lineBreaksBufferStatic.Clear();
+            lineBreaksBuffer.Clear();
 
             // skip '|' or '>'
             Advance(1);
@@ -965,7 +1037,7 @@ namespace VYaml.Parser
             }
 
             // Scan the leading line breaks and determine the indentation level if needed.
-            ConsumeBlockScalarBreaks(ref blockIndent, ref lineBreaksBufferStatic);
+            ConsumeBlockScalarBreaks(ref blockIndent, ref lineBreaksBuffer);
 
             while (mark.Col == blockIndent)
             {
@@ -976,7 +1048,7 @@ namespace VYaml.Parser
                     !leadingBlank &&
                     !trailingBlank)
                 {
-                    if (lineBreaksBufferStatic.Length <= 0)
+                    if (lineBreaksBuffer.Length <= 0)
                     {
                         scalar.Write(YamlCodes.Space);
                     }
@@ -986,9 +1058,9 @@ namespace VYaml.Parser
                     scalar.Write(leadingBreak);
                 }
 
-                scalar.Write(lineBreaksBufferStatic.AsSpan());
+                scalar.Write(lineBreaksBuffer.AsSpan());
                 leadingBlank = YamlCodes.IsBlank(currentCode);
-                lineBreaksBufferStatic.Clear();
+                lineBreaksBuffer.Clear();
 
                 while (!reader.End && !YamlCodes.IsLineBreak(currentCode))
                 {
@@ -1005,7 +1077,7 @@ namespace VYaml.Parser
 
                 leadingBreak = ConsumeLineBreaks();
                 // Eat the following indentation spaces and line breaks.
-                ConsumeBlockScalarBreaks(ref blockIndent, ref lineBreaksBufferStatic);
+                ConsumeBlockScalarBreaks(ref blockIndent, ref lineBreaksBuffer);
             }
 
             // Chomp the tail.
@@ -1015,7 +1087,7 @@ namespace VYaml.Parser
             }
             if (chomping == 1)
             {
-                scalar.Write(lineBreaksBufferStatic.AsSpan());
+                scalar.Write(lineBreaksBuffer.AsSpan());
             }
 
             var tokenType = literal ? TokenType.LiteralScalar : TokenType.FoldedScalar;
@@ -1027,10 +1099,31 @@ namespace VYaml.Parser
             var maxIndent = 0;
             while (true)
             {
+                // Bulk-skip indentation spaces, capped at blockIndent. The outer `while`
+                // keeps the original semantics across segment boundaries.
                 while ((blockIndent == 0 || mark.Col < blockIndent) &&
                        currentCode == YamlCodes.Space)
                 {
-                    Advance(1);
+                    var window = reader.UnreadSpan;
+#if NET8_0_OR_GREATER
+                    var nonSpace = window.IndexOfAnyExcept(YamlCodes.Space);
+                    var spaceRun = nonSpace < 0 ? window.Length : nonSpace;
+#else
+                    var spaceRun = 0;
+                    while (spaceRun < window.Length && window[spaceRun] == YamlCodes.Space)
+                    {
+                        spaceRun++;
+                    }
+#endif
+                    if (blockIndent != 0)
+                    {
+                        var allowed = blockIndent - mark.Col;
+                        if (spaceRun > allowed)
+                        {
+                            spaceRun = allowed;
+                        }
+                    }
+                    AdvanceWithinLine(spaceRun);
                 }
 
                 if (mark.Col > maxIndent)
@@ -1269,8 +1362,8 @@ namespace VYaml.Parser
                                             }
                                         }
                                     }
-                                } 
-                                
+                                }
+
                                 scalar.WriteUnicodeCodepoint(codepoint);
                             }
 
@@ -1279,6 +1372,22 @@ namespace VYaml.Parser
                         default:
                             scalar.Write(currentCode);
                             Advance(1);
+
+                            // Bulk-copy the contiguous run of ordinary characters that
+                            // follows, stopping at the next quote/escape/blank/line break.
+                            var window = reader.UnreadSpan;
+                            if (window.Length > 0)
+                            {
+                                var stop = window.IndexOfAny(singleQuote
+                                    ? Statics.FlowScalarStopSingle
+                                    : Statics.FlowScalarStopDouble);
+                                var runLength = stop < 0 ? window.Length : stop;
+                                if (runLength > 0)
+                                {
+                                    scalar.Write(window[..runLength]);
+                                    AdvanceWithinLine(runLength);
+                                }
+                            }
                             break;
                     }
 
@@ -1448,6 +1557,23 @@ namespace VYaml.Parser
 
                     scalar.Write(currentCode);
                     Advance(1);
+
+                    // Bulk-copy the contiguous run of plain characters that follows.
+                    // At this point any pending whitespace has been flushed, so the run
+                    // can be written verbatim until the next terminating byte.
+                    var window = reader.UnreadSpan;
+                    if (window.Length > 0)
+                    {
+                        var stop = window.IndexOfAny(flowLevel > 0
+                            ? Statics.PlainScalarStopFlow
+                            : Statics.PlainScalarStopBlock);
+                        var runLength = stop < 0 ? window.Length : stop;
+                        if (runLength > 0)
+                        {
+                            scalar.Write(window[..runLength]);
+                            AdvanceWithinLine(runLength);
+                        }
+                    }
                 }
 
                 // is the end?
@@ -1513,8 +1639,26 @@ namespace VYaml.Parser
                 switch (currentCode)
                 {
                     case YamlCodes.Space:
+                    {
                         Advance(1);
+                        // Bulk-skip the run of consecutive spaces that follows.
+                        var window = reader.UnreadSpan;
+#if NET8_0_OR_GREATER
+                        var nonSpace = window.IndexOfAnyExcept(YamlCodes.Space);
+                        var spaceRun = nonSpace < 0 ? window.Length : nonSpace;
+#else
+                        var spaceRun = 0;
+                        while (spaceRun < window.Length && window[spaceRun] == YamlCodes.Space)
+                        {
+                            spaceRun++;
+                        }
+#endif
+                        if (spaceRun > 0)
+                        {
+                            AdvanceWithinLine(spaceRun);
+                        }
                         break;
+                    }
                     case YamlCodes.Tab when flowLevel > 0 || !simpleKeyAllowed:
                         Advance(1);
                         break;
@@ -1524,11 +1668,22 @@ namespace VYaml.Parser
                         if (flowLevel == 0) simpleKeyAllowed = true;
                         break;
                     case YamlCodes.Comment:
+                    {
+                        // Bulk-skip the comment body up to the next line break.
+                        var window = reader.UnreadSpan;
+                        var lineBreakIndex = window.IndexOfAny(YamlCodes.Lf, YamlCodes.Cr);
+                        var commentLength = lineBreakIndex < 0 ? window.Length : lineBreakIndex;
+                        if (commentLength > 0)
+                        {
+                            AdvanceWithinLine(commentLength);
+                        }
+                        // Fall back to per-byte advance across segment boundaries.
                         while (!reader.End && !YamlCodes.IsLineBreak(currentCode))
                         {
                             Advance(1);
                         }
                         break;
+                    }
                     case 0xEF:
                         if (!ConsumeBom()) return;
                         break;
@@ -1556,6 +1711,18 @@ namespace VYaml.Parser
                 reader.Advance(1);
                 reader.TryPeek(out currentCode);
             }
+        }
+
+        // Bulk-advance over `offset` bytes that are guaranteed to contain no line break.
+        // Equivalent to Advance(offset) for that case, but skips the per-byte loop and
+        // line/column bookkeeping (only the column advances).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void AdvanceWithinLine(int offset)
+        {
+            mark.Position += offset;
+            mark.Col += offset;
+            reader.Advance(offset);
+            reader.TryPeek(out currentCode);
         }
 
         LineBreakState ConsumeLineBreaks()
